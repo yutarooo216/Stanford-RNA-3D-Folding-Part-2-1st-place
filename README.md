@@ -38,12 +38,32 @@ Each model is run on sequences it handles best (by length), and the results are 
 ## Repository Structure
 
 ```
-├── solution.ipynb          # Clean solution notebook (submit this to Kaggle)
-└── original_submission.ipynb  # Original competition submission (unmodified)
+├── solution.ipynb              # Clean solution notebook (submit this to Kaggle)
+├── original_submission.ipynb  # Original competition submission (unmodified)
+├── README.md                   # This file
+└── submission_docs.zip         # Winner model submission package (B2–B6)
+    ├── README.md
+    ├── requirements.txt
+    ├── SETTINGS.json
+    └── directory_structure.txt
 ```
 
 - **`solution.ipynb`** — Refactored version: dead code removed, ensemble logic clarified. Produces identical results to the original submission.
 - **`original_submission.ipynb`** — The exact notebook submitted to the competition, preserved as-is.
+- **`submission_docs.zip`** — Documentation package for winner model submission (B2–B6).
+
+---
+
+## Hardware & Environment
+
+| Item | Spec |
+|---|---|
+| GPU | NVIDIA Tesla P100 × 1 (16 GB VRAM) |
+| CPU | Intel Xeon (4 cores) |
+| RAM | 29 GB |
+| OS | Ubuntu 20.04 (Kaggle environment) |
+| Python | 3.12 |
+| CUDA | 11.x (Kaggle default) |
 
 ---
 
@@ -69,6 +89,41 @@ The following external datasets must be added to the notebook:
 | `models/shujun717/ribonanzanet2` | RNApro |
 
 The competition dataset `stanford-rna-3d-folding-2` must also be attached.
+
+### Steps
+
+1. Open `solution.ipynb` on Kaggle
+2. Add all datasets listed above
+3. Set accelerator to **GPU P100**
+4. Click **Run All**
+5. Download `submission.csv` from `/kaggle/working/`
+
+### Training
+
+No training is required. All models use pre-trained weights provided via the Kaggle Datasets listed above.
+
+### Files generated during inference
+
+The following files and directories are created in `/kaggle/working/` during execution:
+
+| Path | Description |
+|---|---|
+| `protenix_submission.csv` | Protenix predictions |
+| `drfold_submission.csv` | DRFold2 predictions |
+| `pred_tbm.csv` | TBM predictions |
+| `rnapro_submission.csv` | RNApro predictions |
+| `boltz_submission.csv` | Boltz2 predictions |
+| `submission.csv` | Final ensembled submission |
+| `RNAPro/` | RNApro source copied from dataset |
+| `chunks/` | Intermediate chunked sequences |
+| `inputs/` | Boltz2 input YAML files |
+| `output/` | Intermediate model outputs |
+
+### Key assumptions
+
+- The environment variable `KAGGLE_IS_COMPETITION_RERUN` must be set. Without it, the notebook writes an all-zeros submission and exits early.
+- All model weights and source code are provided via Kaggle Datasets (no internet access required).
+- All I/O paths are defined in `SETTINGS.json`.
 
 ---
 

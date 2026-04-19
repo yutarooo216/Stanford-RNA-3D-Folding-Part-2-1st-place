@@ -1,0 +1,100 @@
+# syntax=docker/dockerfile:1.4
+# ============================================================
+# Stanford RNA 3D Folding 2 — Solution Image
+# Base: Kaggle GPU Python image (CUDA, PyTorch pre-installed)
+# Datasets and model weights are baked in at build time via
+# the Kaggle CLI.  Pass credentials with:
+#   docker build --secret id=kaggle,src=$HOME/.kaggle/kaggle.json .
+# ============================================================
+FROM gcr.io/kaggle-gpu-images/python:latest
+
+# ---- Install Kaggle CLI and papermill ----
+RUN pip install --no-cache-dir kaggle papermill
+
+# ---- Helper: download a Kaggle dataset to the canonical path ----
+#      Each RUN keeps layers small and allows layer-cache reuse.
+RUN --mount=type=secret,id=kaggle \
+    mkdir -p /root/.kaggle && \
+    cp /run/secrets/kaggle /root/.kaggle/kaggle.json && \
+    chmod 600 /root/.kaggle/kaggle.json
+
+# ---- Competition data (test_sequences.csv, MSA, sample_submission, etc.) ----
+RUN --mount=type=secret,id=kaggle \
+    cp /run/secrets/kaggle /root/.kaggle/kaggle.json && chmod 600 /root/.kaggle/kaggle.json && \
+    mkdir -p /kaggle/input/stanford-rna-3d-folding-2 && \
+    kaggle competitions download -c stanford-rna-3d-folding-2 \
+        -p /kaggle/input/stanford-rna-3d-folding-2 && \
+    cd /kaggle/input/stanford-rna-3d-folding-2 && \
+    find . -name "*.zip" -exec unzip -o -q {} \; && \
+    find . -name "*.zip" -delete
+
+# ---- Python wheel datasets ----
+RUN --mount=type=secret,id=kaggle \
+    cp /run/secrets/kaggle /root/.kaggle/kaggle.json && chmod 600 /root/.kaggle/kaggle.json && \
+    kaggle datasets download kami1976/biopython-cp312 \
+        -p /kaggle/input/datasets/kami1976/biopython-cp312 --unzip && \
+    kaggle datasets download yutaroito/boltz-env-depend \
+        -p /kaggle/input/datasets/yutaroito/boltz-env-depend --unzip && \
+    kaggle datasets download yutaroito/rdkit-312 \
+        -p /kaggle/input/datasets/yutaroito/rdkit-312 --unzip && \
+    kaggle datasets download tobimichigan/biotite-1-2 \
+        -p /kaggle/input/datasets/tobimichigan/biotite-1-2 --unzip && \
+    kaggle datasets download youhanlee/boltz-dependencies \
+        -p /kaggle/input/datasets/youhanlee/boltz-dependencies --unzip
+
+# ---- Model source code datasets ----
+RUN --mount=type=secret,id=kaggle \
+    cp /run/secrets/kaggle /root/.kaggle/kaggle.json && chmod 600 /root/.kaggle/kaggle.json && \
+    kaggle datasets download qiweiyin/protenix-v1-adjusted \
+        -p /kaggle/input/datasets/qiweiyin/protenix-v1-adjusted --unzip && \
+    kaggle datasets download z1493916656/drfold-model-bf16 \
+        -p /kaggle/input/datasets/z1493916656/drfold-model-bf16 --unzip && \
+    kaggle datasets download theoviel/rnapro-src \
+        -p /kaggle/input/datasets/theoviel/rnapro-src --unzip && \
+    kaggle datasets download jaejohn/rnapro-ccd-cache \
+        -p /kaggle/input/datasets/jaejohn/rnapro-ccd-cache --unzip
+
+# ---- Boltz2 source + cache ----
+RUN --mount=type=secret,id=kaggle \
+    cp /run/secrets/kaggle /root/.kaggle/kaggle.json && chmod 600 /root/.kaggle/kaggle.json && \
+    kaggle datasets download lbugnon/boltz-src-minimal \
+        -p /kaggle/input/datasets/lbugnon/boltz-src-minimal --unzip && \
+    kaggle datasets download lbugnon/boltz2 \
+        -p /kaggle/input/datasets/lbugnon/boltz2 --unzip
+
+# ---- RibonanzaNet2 model weights ----
+RUN --mount=type=secret,id=kaggle \
+    cp /run/secrets/kaggle /root/.kaggle/kaggle.json && chmod 600 /root/.kaggle/kaggle.json && \
+    mkdir -p /kaggle/input/models/shujun717/ribonanzanet2/pytorch/alpha/1 && \
+    kaggle models instances versions download \
+        shujun717/ribonanzanet2/pytorch/alpha/1 \
+        -p /kaggle/input/models/shujun717/ribonanzanet2/pytorch/alpha/1 --unzip
+
+# ---- Pre-install Python wheels that don't depend on build-time GPU ----
+RUN pip install --no-index \
+        /kaggle/input/datasets/kami1976/biopython-cp312/*.whl \
+    && pip install --no-index \
+        /kaggle/input/datasets/yutaroito/boltz-env-depend/boltz_wheels_cuda_v2/gemmi-*.whl \
+    && pip install --no-index \
+        /kaggle/input/datasets/yutaroito/rdkit-312/*.whl \
+    && pip install --no-index --no-deps \
+        /kaggle/input/datasets/yutaroito/boltz-env-depend/boltz_wheels_cuda_v2/chembl_structure_pipeline-*.whl \
+        /kaggle/input/datasets/yutaroito/boltz-env-depend/boltz_wheels_cuda_v2/einx-*.whl \
+        /kaggle/input/datasets/tobimichigan/biotite-1-2/*.whl \
+        /kaggle/input/datasets/youhanlee/boltz-dependencies/mashumaro-*.whl \
+        /kaggle/input/datasets/youhanlee/boltz-dependencies/ihm-*.whl \
+        /kaggle/input/datasets/youhanlee/boltz-dependencies/modelcif-*.whl
+
+# ---- Training structure CIFs from RCSB (for TBM full-atom output) ----
+COPY download_train_cifs.py /tmp/download_train_cifs.py
+RUN python3 /tmp/download_train_cifs.py
+
+# ---- Copy solution notebook and runner ----
+COPY solution.ipynb /kaggle/working/solution.ipynb
+COPY run_solution.sh /run_solution.sh
+RUN chmod +x /run_solution.sh
+
+# /kaggle/working is the runtime working directory
+WORKDIR /kaggle/working
+
+ENTRYPOINT ["/run_solution.sh"]

@@ -127,6 +127,113 @@ The following files and directories are created in `/kaggle/working/` during exe
 
 ---
 
+## CASP17 — Running Outside Kaggle (Docker)
+
+For CASP17 and other external use, a Docker-based setup is provided that bakes all model weights and datasets into the image and accepts arbitrary input sequences.
+
+### Key files
+
+| File | Description |
+|---|---|
+| `Dockerfile.solution` | Builds the self-contained inference image (downloads all Kaggle datasets at build time) |
+| `docker-compose.solution.yml` | Convenience wrapper with GPU reservation and volume mounts |
+| `solution_custum.ipynb` | Modified notebook used inside the container: full all-atom CIF/PDB output (5 structures per target), protein–RNA complex support, English comments |
+| `run_solution.sh` | Container entrypoint — GPU detection, path resolution, papermill execution |
+| `download_train_cifs.py` | Downloads training CIF files from RCSB at build time (required for TBM full-atom output) |
+
+### Prerequisites
+
+- Docker with BuildKit enabled
+- NVIDIA Container Toolkit (`nvidia-docker2`)
+- Kaggle API credentials at `~/.kaggle/kaggle.json`
+- Accepted competition terms for `stanford-rna-3d-folding-2`
+
+### Build
+
+All datasets and model weights are downloaded from Kaggle during the build. Credentials are passed via `--secret` and do **not** end up in any image layer.
+
+```bash
+DOCKER_BUILDKIT=1 docker build \
+  --secret id=kaggle,src=$HOME/.kaggle/kaggle.json \
+  -f Dockerfile.solution \
+  -t rna3d-solution:latest \
+  .
+```
+
+Expected image size: ~50–100 GB. Build time is dominated by Kaggle downloads (~30–60 min).
+
+### Run
+
+**Using competition test sequences baked into the image:**
+
+```bash
+docker run --gpus all \
+  -v $(pwd)/output:/kaggle/working/structures \
+  rna3d-solution:latest
+```
+
+**Using custom input sequences (CASP17 targets):**
+
+The input CSV must follow the competition schema: `target_id`, `sequence`, `all_sequences`, `stoichiometry`, `ligand_SMILES`, `ligand_ids`.
+
+```bash
+docker run --gpus all \
+  -v /path/to/test_sequences.csv:/input/test_sequences.csv:ro \
+  -v /path/to/MSA:/input/MSA:ro \
+  -v $(pwd)/output:/kaggle/working/structures \
+  rna3d-solution:latest
+```
+
+**Via docker-compose:**
+
+```bash
+TEST_CSV=/path/to/test_sequences.csv \
+MSA_DIR=/path/to/MSA \
+OUTPUT_DIR=$(pwd)/output \
+docker compose -f docker-compose.solution.yml up
+```
+
+### GPU requirements
+
+| GPU | VRAM | Notes |
+|---|---|---|
+| L4 | 24 GB | Default target; set `BOLTZ_DEVICES=1` |
+| A100 / RTX PRO 6000 | 80–96 GB | Can use `BOLTZ_DEVICES=2` for speed |
+
+Override GPU count:
+
+```bash
+docker run --gpus all -e BOLTZ_DEVICES=2 -v ... rna3d-solution:latest
+```
+
+### Output
+
+All-atom structures are written to the mounted output directory:
+
+```
+output/
+  {target_id}/
+    {target_id}_model_1.cif   # best prediction (all-atom)
+    {target_id}_model_2.cif
+    {target_id}_model_3.cif
+    {target_id}_model_4.cif
+    {target_id}_model_5.cif
+```
+
+Format is CIF for Protenix / RNApro outputs and PDB for Boltz2 / TBM / DRFold2 outputs.
+The legacy C1' CSV is also written to `/kaggle/working/submission.csv`.
+
+### Differences from the Kaggle notebook
+
+| Feature | Kaggle (`solution.ipynb`) | CASP17 (`solution_custum.ipynb`) |
+|---|---|---|
+| Output | C1' coordinates only (`submission.csv`) | Full all-atom structures (CIF/PDB) |
+| Protein–RNA complexes | Partial | Full support in all models |
+| Input | Competition test set only | Arbitrary sequences via bind-mount |
+| BOLTZ_DEVICES | Fixed at 1 | Configurable via env var |
+
+---
+
 ## Discussion
 
 → [Kaggle Discussion Post: 1st Place Solution](https://www.kaggle.com/competitions/stanford-rna-3d-folding-2/writeups/1st-place-solution-five-model-ensemble)

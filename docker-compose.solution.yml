@@ -1,0 +1,22 @@
+services:
+  rna3d-solution:
+    image: rna3d-solution:latest
+    container_name: rna3d-solution
+    # Pass your sequences and MSA; collect structures from output
+    volumes:
+      - ${TEST_CSV:-./test_sequences.csv}:/input/test_sequences.csv:ro
+      - ${MSA_DIR:-./MSA}:/input/MSA:ro
+      - ${OUTPUT_DIR:-./output}:/kaggle/working/structures
+    environment:
+      - KAGGLE_IS_COMPETITION_RERUN=1
+      # Override any of these as needed:
+      # - NUM_GPUS=1
+      # - BOLTZ_DEVICES=1
+      # - TEST_TARGETS=9ZCC,8ZNQ   # debug: run only specific targets
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

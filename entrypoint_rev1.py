@@ -39,6 +39,7 @@ import tempfile
 from pathlib import Path
 
 from relabel_concat_pdb import TooManyChainsError, build_chain_assignments, relabel_pdb
+from sobolev_polish_gate import iter_accepted_polished_slots, rows_for_polished_slot
 
 PROCESSING_INPUT_DIR = os.environ.get(
     "PROCESSING_INPUT_DIR", "/opt/ml/processing/input"
@@ -886,6 +887,33 @@ def write_slot_fallback(slot_dir, target_rows, method_name, method_rank, source_
     fallback_path.write_text("\n".join(lines) + "\n")
 
 
+def write_polished_slot_fallback(slot_dir, polished_rows, polish_info):
+    fallback_path = slot_dir / "selected_output.txt"
+    lines = [
+        "method=sobolev_polish",
+        f"method_rank={polish_info['slot']}",
+        "source_csv=submission.csv",
+        f"source_method={polish_info['source']}",
+        f"source_method_rank={polish_info['rank']}",
+        "note=Accepted guarded SobolevRNA C1' polish; all-atom source is not reused.",
+        "ID,resname,resid,x,y,z",
+    ]
+    for row in polished_rows:
+        lines.append(
+            ",".join(
+                [
+                    row["ID"],
+                    row.get("resname", ""),
+                    str(row.get("resid", "")),
+                    str(row.get("x", "")),
+                    str(row.get("y", "")),
+                    str(row.get("z", "")),
+                ]
+            )
+        )
+    fallback_path.write_text("\n".join(lines) + "\n")
+
+
 def export_final_submission_artifacts():
     output_root = Path(OUTPUT_DIR)
     artifact_root = output_root / "final_submission_artifacts"
@@ -898,6 +926,18 @@ def export_final_submission_artifacts():
         "rnapro": rows_by_target(read_csv_rows(Path(KAGGLE_WORKING) / "rnapro_submission.csv")),
         "boltz": rows_by_target(read_csv_rows(Path(KAGGLE_WORKING) / "boltz_submission.csv")),
     }
+    polished_slots = {
+        (row["target_id"], row["slot"]): row
+        for row in iter_accepted_polished_slots(
+            str(Path(KAGGLE_WORKING) / "sobolev_polished_slots.csv")
+        )
+    }
+    final_submission_path = Path(KAGGLE_WORKING) / "submission.csv"
+    final_submission_rows = (
+        rows_by_target(read_csv_rows(final_submission_path))
+        if polished_slots and final_submission_path.exists()
+        else {}
+    )
 
     manifest = []
     for test_row in load_test_sequences():
@@ -918,41 +958,52 @@ def export_final_submission_artifacts():
             slot_dir = target_dir / f"slot_{slot_idx}_{method_name}_{method_rank}"
             slot_dir.mkdir(parents=True, exist_ok=True)
 
-            target_rows = method_csvs.get(method_name, {}).get(target_id, [])
-            files, note = find_structure_files_for_slot(
-                target_id=target_id,
-                method_name=method_name,
-                method_rank=method_rank,
-                target_rows=target_rows,
-            )
-            copied_files = []
-            for src_path in files:
-                dst_path = slot_dir / src_path.name
-                shutil.copy2(src_path, dst_path)
-                copied_files.append(dst_path.relative_to(output_root).as_posix())
-
             source_csv = f"{method_name}_submission.csv"
             if method_name == "tbm":
                 source_csv = "pred_tbm.csv"
-            if copied_files:
-                details = [
-                    f"method={method_name}",
-                    f"method_rank={method_rank}",
-                    f"source_csv={source_csv}",
-                ]
-                if note:
-                    details.append(f"note={note}")
-                details.extend(f"file={path}" for path in copied_files)
-                (slot_dir / "selection.txt").write_text("\n".join(details) + "\n")
+            copied_files = []
+            polished = False
+            polish_info = polished_slots.get((target_id, slot_idx))
+
+            if polish_info and target_id in final_submission_rows:
+                polished_rows = rows_for_polished_slot(
+                    final_submission_rows[target_id], slot_idx
+                )
+                write_polished_slot_fallback(slot_dir, polished_rows, polish_info)
+                source_csv = "submission.csv"
+                polished = True
             else:
-                write_slot_fallback(
-                    slot_dir=slot_dir,
-                    target_rows=target_rows,
+                target_rows = method_csvs.get(method_name, {}).get(target_id, [])
+                files, note = find_structure_files_for_slot(
+                    target_id=target_id,
                     method_name=method_name,
                     method_rank=method_rank,
-                    source_csv=source_csv,
-                    note=note,
+                    target_rows=target_rows,
                 )
+                for src_path in files:
+                    dst_path = slot_dir / src_path.name
+                    shutil.copy2(src_path, dst_path)
+                    copied_files.append(dst_path.relative_to(output_root).as_posix())
+
+                if copied_files:
+                    details = [
+                        f"method={method_name}",
+                        f"method_rank={method_rank}",
+                        f"source_csv={source_csv}",
+                    ]
+                    if note:
+                        details.append(f"note={note}")
+                    details.extend(f"file={path}" for path in copied_files)
+                    (slot_dir / "selection.txt").write_text("\n".join(details) + "\n")
+                else:
+                    write_slot_fallback(
+                        slot_dir=slot_dir,
+                        target_rows=target_rows,
+                        method_name=method_name,
+                        method_rank=method_rank,
+                        source_csv=source_csv,
+                        note=note,
+                    )
 
             slot_manifest["slots"].append(
                 {
@@ -962,6 +1013,7 @@ def export_final_submission_artifacts():
                     "source_csv": source_csv,
                     "structure_files": copied_files,
                     "fallback": not copied_files,
+                    "sobolev_polished": polished,
                 }
             )
 
@@ -993,6 +1045,8 @@ def export_selected_artifacts():
         "rnapro_submission.csv",
         "boltz_submission.csv",
         "submission.csv",
+        "sobolev_polish_report.csv",
+        "sobolev_polished_slots.csv",
         "structures",
         "output",
     ]:

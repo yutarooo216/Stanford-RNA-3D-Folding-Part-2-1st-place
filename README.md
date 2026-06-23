@@ -35,11 +35,103 @@ Each model is run on sequences it handles best (by length), and the results are 
 
 ---
 
+## Guarded SobolevRNA Polish
+
+This fork adds an optional production-safe SobolevRNA post-processing stage after
+the five model CSVs are produced and before the final slot overlay is exported.
+The original 1st-place slot plan remains the fallback: a polished candidate only
+replaces its raw slot when every safety check passes.
+
+The polish step uses the input C1' coordinates directly. It does **not** use the
+stochastic `shr_refine_single` path and never adds Gaussian jitter or random
+re-initialization. The local objective is the SobolevRNA coarse Hamiltonian
+
+$$
+H(X) = E_{\mathrm{bond}}(X) + E_{\mathrm{steric}}(X) +
+       E_{\mathrm{DL}}(X; C),
+$$
+
+with the radius-of-gyration term disabled during polish (`rg_target = 0`) so the
+optimizer removes local roughness without imposing a new global fold. The terms
+are
+
+$$
+E_{\mathrm{bond}} =
+k_{\mathrm{bond}}\sum_{i=1}^{N-1}
+\left(\lVert x_{i+1}-x_i\rVert_2 - 5.95\right)^2,
+$$
+
+$$
+E_{\mathrm{steric}} =
+\sum_{j>i+1}
+\left[\max\left(0,\sigma_{\mathrm{clash}} -
+\sqrt{\lVert x_i-x_j\rVert_2^2 + 10^{-2}}\right)\right]^2,
+$$
+
+$$
+E_{\mathrm{DL}} =
+w_{\mathrm{DL}}\sum_{i,j} C_{ij}
+\left[\max\left(0,\lVert x_i-x_j\rVert_2 - 8.0\right)\right]^2.
+$$
+
+The gradient is preconditioned in the discrete cosine basis using the Sobolev
+$H^1$ resolvent
+
+$$
+\widetilde{\nabla H}
+= \operatorname{IDCT}_{II}\left(
+\frac{\operatorname{DCT}_{II}(\nabla H)_k}{1+\alpha k^2}
+\right),
+$$
+
+implemented with `jax.scipy.fft.dct` / `jax.scipy.fft.idct` and
+`jax_enable_x64=True`. The default production polish is 2000 steps at
+`lr = 0.01`, `alpha = 5.0`, `clip = 2.0`, `k_bond = 100.0`,
+`sigma_clash = 3.0`, and `w_DL = 2.0`.
+
+### Safety Gate
+
+For each candidate slot, the refined coordinates are accepted only if all checks
+pass:
+
+1. Shape matches the raw candidate and all coordinates are finite, non-sentinel,
+   and within the existing sanitizer bound.
+2. Bond violations do not increase, where a violation is an adjacent C1'
+   distance with `abs(d - 5.95) > 2.0 A`.
+3. Steric clashes do not increase, using KDTree pairs below `3.0 A` and
+   excluding adjacent residues.
+4. `H(refined) < H(raw)` under the same contact map.
+5. `Rg(refined)` lies in `[0.7, 1.5] * (3.5 * N**0.45)`.
+6. `max(||x[i+1] - x[i]||) < 12.0 A`.
+7. `tm_self >= 0.85`, computed by Kabsch-aligning refined to raw coordinates and
+   applying a TM-style C1' similarity over valid residues.
+
+Accepted slots are written into `/kaggle/working/submission.csv`. Rejected slots
+remain byte-for-byte the original model coordinates for that slot.
+
+### Runtime Controls
+
+| Variable | Default | Effect |
+|---|---:|---|
+| `SOBOLERNA_POLISH` | `1` | Set to `0` to disable polish and preserve the original ensemble exactly |
+| `SOBOLERNA_POLISH_SLOTS` | all | Optional comma-separated slot allowlist, for example `1,2,3` |
+| `SOBOLERNA_POLISH_STEPS` | `2000` | Number of Sobolev polish steps |
+| `SOBOLERNA_POLISH_LR` | `0.01` | Sobolev polish learning rate |
+
+The stage emits `/kaggle/working/sobolev_polish_report.csv` with per-candidate
+metrics and `/kaggle/working/sobolev_polished_slots.csv` with accepted slots.
+Docker/SageMaker artifact export treats accepted polished slots as C1'-only
+fallback structures because the polish is intentionally C1'-level in v1.
+
+---
+
 ## Repository Structure
 
 ```
 ├── solution.ipynb              # Clean solution notebook (submit this to Kaggle)
 ├── original_submission.ipynb  # Original competition submission (unmodified)
+├── sobolev_polish_gate.py      # Guarded SobolevRNA C1' polish and accept gate
+├── tests/                      # Unit tests for the polish safety gate
 ├── README.md                   # This file
 └── submission_docs.zip         # Winner model submission package (B2–B6)
     ├── README.md
@@ -114,6 +206,8 @@ The following files and directories are created in `/kaggle/working/` during exe
 | `rnapro_submission.csv` | RNApro predictions |
 | `boltz_submission.csv` | Boltz2 predictions |
 | `submission.csv` | Final ensembled submission |
+| `sobolev_polish_report.csv` | Per-candidate polish metrics and reject reasons |
+| `sobolev_polished_slots.csv` | Accepted polished slots used during artifact export |
 | `RNAPro/` | RNApro source copied from dataset |
 | `chunks/` | Intermediate chunked sequences |
 | `inputs/` | Boltz2 input YAML files |

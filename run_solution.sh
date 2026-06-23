@@ -65,6 +65,17 @@ if [ ! -f "$TEST_CSV" ]; then
 fi
 
 mkdir -p "$STRUCTURES_OUT"
+mkdir -p "$WORKING"
+
+# Keep the notebook and Sobolev polish module importable whether the image is
+# run from /app, /kaggle/working, or a bind-mounted workspace.
+if [ -f /app/solution.ipynb ]; then
+    cp /app/solution.ipynb "$WORKING/solution.ipynb"
+fi
+if [ -f /app/sobolev_polish_gate.py ]; then
+    cp /app/sobolev_polish_gate.py "$WORKING/sobolev_polish_gate.py"
+fi
+export PYTHONPATH="/app:$WORKING:${PYTHONPATH:-}"
 
 # ---- Set Kaggle scoring flag so notebook runs in full inference mode ----
 export KAGGLE_IS_COMPETITION_RERUN=1

@@ -33,6 +33,7 @@ RUN --mount=type=bind,from=kaggle_input,target=/kaggle/input \
 
 # ---- Copy solution notebook and runner ----
 COPY solution.ipynb /app/solution.ipynb
+COPY sobolev_polish_gate.py /app/sobolev_polish_gate.py
 COPY run_solution.sh /app/run_solution.sh
 RUN chmod +x /app/run_solution.sh
 
